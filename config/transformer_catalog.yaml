@@ -1,0 +1,34 @@
+# Catálogo de pérdidas de transformadores de distribución por potencia nominal.
+#
+# La GDB de CNEL (UNIDADTRANSFDISTRIBUCION) NO trae P0 ni Pk: solo la potencia
+# nominal. Estos valores se usan como respaldo y la unidad queda marcada con
+# plate_source='catalog' para que la incertidumbre lo refleje (§Anexo B.4).
+#
+# AJUSTAR a las normas y marcas reales del parque (INEN 2114/2115, datos de
+# placa de ECUATRAN/INATRA...). Un error aquí sesga TODAS las pérdidas técnicas.
+#
+#   p0_kw = pérdidas de vacío (permanentes, 8760 h)
+#   pk_kw = pérdidas de carga a potencia nominal
+transformer_catalog:
+  default_p0_frac: 0.0030      # si el kVA no está en la tabla: 0,30 % de Sn
+  default_pk_frac: 0.0110      # 1,10 % de Sn
+  by_kva:
+    5:     { p0_kw: 0.030, pk_kw: 0.090 }
+    10:    { p0_kw: 0.045, pk_kw: 0.150 }
+    15:    { p0_kw: 0.060, pk_kw: 0.200 }
+    25:    { p0_kw: 0.085, pk_kw: 0.310 }
+    37.5:  { p0_kw: 0.115, pk_kw: 0.430 }
+    50:    { p0_kw: 0.145, pk_kw: 0.550 }
+    75:    { p0_kw: 0.200, pk_kw: 0.780 }
+    100:   { p0_kw: 0.250, pk_kw: 1.000 }
+    112.5: { p0_kw: 0.270, pk_kw: 1.100 }
+    150:   { p0_kw: 0.340, pk_kw: 1.400 }
+    167:   { p0_kw: 0.370, pk_kw: 1.550 }
+    200:   { p0_kw: 0.420, pk_kw: 1.800 }
+    250:   { p0_kw: 0.500, pk_kw: 2.150 }
+    300:   { p0_kw: 0.580, pk_kw: 2.500 }
+    400:   { p0_kw: 0.720, pk_kw: 3.200 }
+    500:   { p0_kw: 0.850, pk_kw: 3.900 }
+    630:   { p0_kw: 1.030, pk_kw: 4.800 }
+    750:   { p0_kw: 1.180, pk_kw: 5.600 }
+    1000:  { p0_kw: 1.500, pk_kw: 7.200 }
