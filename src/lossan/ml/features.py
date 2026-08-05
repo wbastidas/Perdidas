@@ -96,14 +96,25 @@ def build_features(consumption: pd.DataFrame, customers: pd.DataFrame,
 
     df = pd.DataFrame(feats)
 
-    # z-scores contra grupo par (puesto de transformación y clase) + ratio carga
-    meta = customers[["customer_unit_id", "transformer_site_id", "tariff_class",
-                      "installed_load_kw", "service_drop_kva"]]
+    # z-scores contra grupo par (puesto de transformación y clase) + ratio carga.
+    # Las columnas opcionales pueden no venir del SIG (p. ej. la GDB de CNEL no
+    # trae la capacidad de acometida): se usan solo las disponibles.
+    wanted = ["customer_unit_id", "transformer_site_id", "tariff_class",
+              "installed_load_kw", "service_drop_kva"]
+    meta = customers[[c for c in wanted if c in customers.columns]]
     df = df.merge(meta, on="customer_unit_id", how="left")
-    grp = df.groupby(["transformer_site_id", "tariff_class"])["mean_6"]
-    df["z_peer"] = (df["mean_6"] - grp.transform("mean")) / (grp.transform("std") + 1e-9)
-    df["consumo_vs_instalada"] = df["mean_6"] / (df["installed_load_kw"] * 720 + 1e-9)
 
-    df = df.drop(columns=["transformer_site_id", "tariff_class"])
+    group_cols = [c for c in ("transformer_site_id", "tariff_class") if c in df.columns]
+    if group_cols:
+        grp = df.groupby(group_cols)["mean_6"]
+        df["z_peer"] = ((df["mean_6"] - grp.transform("mean"))
+                        / (grp.transform("std") + 1e-9))
+    else:
+        df["z_peer"] = 0.0
+    if "installed_load_kw" in df.columns:
+        df["consumo_vs_instalada"] = df["mean_6"] / (
+            df["installed_load_kw"].fillna(0.0) * 720 + 1e-9)
+
+    df = df.drop(columns=group_cols)
     df = df.fillna(0.0)
     return df

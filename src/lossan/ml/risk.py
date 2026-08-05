@@ -76,11 +76,20 @@ def train_risk_model(consumption: pd.DataFrame, customers: pd.DataFrame,
     cfg = cfg or load_config()
     feats = build_features(consumption, customers, cutoff=cutoff)
     ids = feats["customer_unit_id"].to_numpy()
-    feat_cols = [c for c in feats.columns if c not in _FEATURE_DROP]
+    # sólo columnas numéricas: el SIG aporta campos de texto (serial, cuenta,
+    # marca...) que no son features y romperían el entrenamiento.
+    feat_cols = [c for c in feats.columns
+                 if c not in _FEATURE_DROP
+                 and pd.api.types.is_numeric_dtype(feats[c])]
     X = feats[feat_cols].to_numpy(dtype=float)
 
-    # positivos P: hurtos confirmados si existen; si no, minería de alta confianza
-    if theft_labels is not None and theft_labels["is_theft"].any():
+    # Positivos P: hurtos confirmados si existen. En producción normalmente NO
+    # existen (la tabla llega vacía o sin la columna), y entonces los positivos
+    # salen de la minería de etiquetas de alta confianza sobre el histórico.
+    has_labels = (theft_labels is not None and not theft_labels.empty
+                  and "is_theft" in theft_labels.columns
+                  and bool(theft_labels["is_theft"].any()))
+    if has_labels:
         pos_ids = set(theft_labels.loc[theft_labels["is_theft"], "customer_unit_id"])
     else:
         mined = mine_labels(consumption, customers, cfg)

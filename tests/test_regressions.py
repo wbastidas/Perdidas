@@ -123,3 +123,44 @@ def test_no_hardcoded_business_constants_in_pipeline():
     for key in ("default_load_factor", "default_site_pf", "secondary_loss_frac",
                 "hours_per_month"):
         assert key in cfg.electrical
+
+
+# --- BUG 7: el pipeline asumía datos que la GDB de CNEL no tiene -----------
+
+def test_risk_model_without_ground_truth(micro_config):
+    """En producción NO hay verdad-terreno: el modelo debe usar minería."""
+    from lossan.ml import train_risk_model
+    t = _tables(micro_config)
+    # tabla vacía (lo que devuelve el lakehouse cuando la entidad no existe)
+    for empty in (pd.DataFrame(), None):
+        scores, info = train_risk_model(t["consumption"], t["customers"], empty,
+                                        cfg=load_config())
+        assert not scores.empty
+        assert "risk_score" in scores.columns
+
+
+def test_features_without_optional_sig_columns(micro_config):
+    """La GDB de CNEL no trae service_drop_kva: no debe romper las features."""
+    from lossan.ml import build_features
+    t = _tables(micro_config)
+    cust = t["customers"].drop(columns=["service_drop_kva"])
+    feats = build_features(t["consumption"], cust)
+    assert not feats.empty and "z_peer" in feats.columns
+
+
+def test_transformer_catalog_fills_missing_losses():
+    """La GDB solo trae kVA: P0/Pk se completan del catálogo y se marca origen."""
+    from lossan.io.cnel import apply_transformer_catalog
+    units = pd.DataFrame({"unit_id": ["u1", "u2", "u3"],
+                          "sn_kva": [50.0, 37.5, 999.0]})   # 999 no está en catálogo
+    out = apply_transformer_catalog(units)
+    assert out["p0_kw"].notna().all() and out["pk_kw"].notna().all()
+    assert set(out["plate_source"]) == {"catalog"}
+    assert out.loc[0, "p0_kw"] == 0.145        # valor exacto del catálogo (50 kVA)
+    assert out.loc[2, "p0_kw"] == pytest.approx(999.0 * 0.003, abs=1e-3)  # fracción
+
+
+def test_validate_labels_without_ground_truth():
+    from lossan.ml import validate_against_confirmed
+    res = validate_against_confirmed(pd.DataFrame(), pd.DataFrame())
+    assert res["confirmed"] == 0

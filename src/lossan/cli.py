@@ -211,6 +211,20 @@ def ingest_fgdb_cmd(
     typer.echo(json.dumps(counts, indent=2))
 
 
+@app.command("generate-cnel")
+def generate_cnel_cmd(
+    root: str = typer.Option(None, help="Raíz del lakehouse de origen."),
+    out: str = typer.Option("export/dataset_cnel", help="Carpeta de salida."),
+) -> None:
+    """Exporta el universo sintético al FORMATO de CNEL (capas SIGELEC + CIS),
+    para probar la ruta real de ingesta `lossan ingest-cnel`."""
+    from .synth.cnel_export import export_cnel_dataset
+
+    root = root or _default_root()
+    res = export_cnel_dataset(root, out)
+    typer.echo(json.dumps(res, indent=2, ensure_ascii=False))
+
+
 @app.command("ingest-cnel")
 def ingest_cnel_cmd(
     path: str = typer.Argument(..., help="Ruta a la .gdb con el modelo CNEL/SIGELEC."),
@@ -227,6 +241,27 @@ def ingest_cnel_cmd(
     counts = ingest_cnel_fgdb(path, root, mp, extract_date=extract_date)
     hier = counts.pop("_hierarchy", [])
     typer.echo("Conteos ingeridos (§2.1):")
+    typer.echo(json.dumps(counts, indent=2))
+    if hier:
+        typer.echo("\nJerarquía puesto/unidad detectada:")
+        for r in hier:
+            typer.echo(f"  {r['relacion']}: {r['padres']} padres, {r['hijos']} hijos "
+                       f"(máx {r['hijos_por_padre_max']}/padre, "
+                       f"{r['padres_multi']} con más de uno)")
+
+
+@app.command("ingest-cnel-csv")
+def ingest_cnel_csv_cmd(
+    directory: str = typer.Argument(..., help="Carpeta con un CSV por capa CNEL."),
+    root: str = typer.Option(None, help="Raíz del lakehouse."),
+    mapping: str = typer.Option(None, help="YAML de mapeo (default: config/cnel_mapping.yaml)."),
+) -> None:
+    """Ingiere un dataset CNEL en CSV (misma lógica que la FGDB, sin GDAL)."""
+    from .io.cnel import ingest_cnel_csv, load_cnel_mapping
+
+    root = root or _default_root()
+    counts = ingest_cnel_csv(directory, root, load_cnel_mapping(mapping))
+    hier = counts.pop("_hierarchy", [])
     typer.echo(json.dumps(counts, indent=2))
     if hier:
         typer.echo("\nJerarquía puesto/unidad detectada:")

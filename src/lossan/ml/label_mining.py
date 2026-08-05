@@ -224,6 +224,9 @@ def validate_against_confirmed(mined: pd.DataFrame, theft_labels: pd.DataFrame,
 
     Reporta el recall de los mecanismos de alta confianza sobre los confirmados.
     """
+    if (theft_labels is None or theft_labels.empty
+            or "is_theft" not in theft_labels.columns):
+        return {"confirmed": 0, "recall_high_conf": None, "recall_all": None}
     confirmed = set(theft_labels.loc[theft_labels["is_theft"], "customer_unit_id"])
     if not confirmed:
         return {"confirmed": 0, "recall_high_conf": None, "recall_all": None}

@@ -161,8 +161,29 @@ layers:
     fields:
       streetlight_id: GLOBALID
       pole_id: ESTRUCTURASOPORTEGLOBALID
-      transformer_site_id: PARENTCIRCUITSOURCEGUID
+      # referencia por trazado ArcFM: se traduce al site_id del puesto
+      parent_circuit_source: PARENTCIRCUITSOURCEGUID
       phase_raw: FASECONEXION
+      technology: TECNOLOGIA
+      lamp_w: POTENCIA
+
+  # Tramos: el primario y el secundario se unen en la entidad canónica
+  # 'segments'. 'extra_layers' indica capas adicionales con el mismo mapeo.
+  segments:
+    layer: TramoDistribucionAereo
+    extra_layers: [TramoBajaTensionAereo]
+    fields:
+      segment_id: GLOBALID
+      node_from: NODOINICIAL
+      node_to: NODOFINAL
+      conductor_code: CALIBRE
+      length_m: LONGITUD
+      phase_raw: FASECONEXION
+      voltage_ll: VOLTAJE
+      material: MATERIAL
+      r_ohm_per_km: RESISTENCIA
+      x_ohm_per_km: REACTANCIA
+      ampacity_a: AMPACIDAD
 
   switching_devices:
     layer: PuestoProteccionDinamico

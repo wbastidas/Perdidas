@@ -96,7 +96,9 @@ def build_inspection_plan(root: str, cfg: Config | None = None) -> dict:
     # Precision@k con k derivado del presupuesto (§17.2)
     theft = lake.read_entity("bronze", "theft_labels")
     prec = {}
-    if not theft.empty:
+    # La verdad-terreno solo existe en pruebas; en producción no hay con qué
+    # medir Precision@k hasta que vuelvan los resultados de campo (§23.1).
+    if not theft.empty and "is_theft" in theft.columns:
         truth = set(theft.loc[theft["is_theft"], "customer_unit_id"])
         cost_visit = float(cfg.economics["cost_per_visit_usd"]["transformer_site"])
         for cpv in (20, 30, 50, 80):

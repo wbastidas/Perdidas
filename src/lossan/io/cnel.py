@@ -19,11 +19,12 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
+import numpy as np
 import pandas as pd
 import yaml
 from loguru import logger
 
-from ..config import config_dir
+from ..config import config_dir, load_config
 from ..domain.enums import BankConfig, Phase
 from ..lakehouse import Lakehouse
 
@@ -103,6 +104,43 @@ def decode_tariff(value, domain: dict, default: str = "residential") -> str:
     return default
 
 
+def apply_transformer_catalog(units: pd.DataFrame,
+                              cfg=None) -> pd.DataFrame:
+    """Completa ``p0_kw``/``pk_kw`` desde el catálogo por kVA.
+
+    La GDB solo trae la potencia nominal. Se busca el kVA exacto en el catálogo
+    y, si no está, se aplica la fracción por defecto sobre Sn. Cada unidad queda
+    marcada con ``plate_source`` = ``plate`` (venía de la GDB) o ``catalog``.
+    """
+    cfg = cfg or load_config()
+    cat = cfg.transformer_catalog
+    by_kva = {float(k): v for k, v in cat.get("by_kva", {}).items()}
+    p0_frac = float(cat.get("default_p0_frac", 0.003))
+    pk_frac = float(cat.get("default_pk_frac", 0.011))
+
+    def lookup(sn, field, frac):
+        if sn is None or pd.isna(sn):
+            return None
+        entry = by_kva.get(float(sn))
+        return entry[field] if entry else round(float(sn) * frac, 4)
+
+    has_p0 = "p0_kw" in units.columns
+    has_pk = "pk_kw" in units.columns
+    p0 = units["p0_kw"] if has_p0 else pd.Series([None] * len(units), index=units.index)
+    pk = units["pk_kw"] if has_pk else pd.Series([None] * len(units), index=units.index)
+    from_plate = p0.notna() & pk.notna()
+    units["p0_kw"] = [v if pd.notna(v) else lookup(sn, "p0_kw", p0_frac)
+                      for v, sn in zip(p0, units["sn_kva"])]
+    units["pk_kw"] = [v if pd.notna(v) else lookup(sn, "pk_kw", pk_frac)
+                      for v, sn in zip(pk, units["sn_kva"])]
+    units["plate_source"] = np.where(from_plate, "plate", "catalog")
+    n_cat = int((units["plate_source"] == "catalog").sum())
+    if n_cat:
+        logger.info(f"P0/Pk del catálogo para {n_cat}/{len(units)} unidades "
+                    f"(la GDB no trae datos de placa).")
+    return units
+
+
 def parse_kva(value) -> float | None:
     """Extrae el kVA de un campo que en CNEL viene como texto de dominio."""
     if value is None or (isinstance(value, float) and pd.isna(value)):
@@ -146,13 +184,22 @@ def build_canonical(layers: dict[str, pd.DataFrame], mapping: dict,
         spec = lmap.get(entity)
         if not spec:
             return None
-        raw = layers.get(spec["layer"])
-        if raw is None or raw.empty:
+        # una entidad canónica puede venir de varias capas (p. ej. los tramos
+        # primario y secundario se unen en 'segments')
+        names = [spec["layer"]] + list(spec.get("extra_layers", []))
+        parts = []
+        for name in names:
+            raw = layers.get(name)
+            if raw is None or raw.empty:
+                continue
+            df = _rename(raw, spec["fields"])
+            df["feeder_id"] = (raw[ff].astype(str) if ff in raw.columns
+                               else (feeder_id or "UNKNOWN"))
+            df["source_layer"] = name
+            parts.append(df)
+        if not parts:
             return None
-        df = _rename(raw, spec["fields"])
-        df["feeder_id"] = (raw[ff].astype(str) if ff in raw.columns
-                           else (feeder_id or "UNKNOWN"))
-        return df
+        return pd.concat(parts, ignore_index=True)
 
     # --- poles / estructuras ---
     poles = get("poles")
@@ -167,7 +214,9 @@ def build_canonical(layers: dict[str, pd.DataFrame], mapping: dict,
         if "phase_raw" in units:
             units["phase"] = units["phase_raw"].map(lambda v: decode_phase(v, phase_dom))
             units = units.drop(columns=["phase_raw"])
-        units["plate_source"] = "catalog"   # la GDB no trae P0/Pk (Anexo B.4)
+        # La GDB de CNEL no trae P0/Pk: se completan del catálogo por kVA y se
+        # marca el origen para que la incertidumbre lo refleje (Anexo B.4).
+        units = apply_transformer_catalog(units)
         n_units_by_site = units.groupby("site_id").size().to_dict()
         out["transformer_units"] = units
 
@@ -222,6 +271,13 @@ def build_canonical(layers: dict[str, pd.DataFrame], mapping: dict,
             cust = cust.drop(columns=["phase_raw"])
         # heredar del punto de carga: transformador, poste y (si falta) la fase
         if lps is not None:
+            dup = int(lps["load_point_id"].duplicated().sum())
+            if dup:
+                logger.warning(
+                    f"{dup} PuntoCarga con GLOBALID duplicado: se conserva el "
+                    f"primero. Revisa la extracción de la GDB.")
+                lps = lps.drop_duplicates(subset=["load_point_id"], keep="first")
+                out["load_points"] = lps
             lp = lps.set_index("load_point_id")
             cust["transformer_site_id"] = cust["site_id"].map(
                 lp["transformer_site_id"]) if "transformer_site_id" in lp else None
@@ -256,13 +312,34 @@ def build_canonical(layers: dict[str, pd.DataFrame], mapping: dict,
             cust["tariff_class"] = tdefault
         out["customers"] = cust
 
-    # --- luminarias y dispositivos ---
-    for name in ("streetlights", "switching_devices"):
+    # Mapa CIRCUITSOURCEGUID -> site_id: en ArcFM los hijos referencian la
+    # fuente de circuito del padre, no su GLOBALID.
+    cs_to_site: dict = {}
+    if sites is not None and "node_id" in sites.columns:
+        cs_to_site = dict(zip(sites["node_id"], sites["site_id"]))
+
+    # --- luminarias, dispositivos y tramos ---
+    for name in ("streetlights", "switching_devices", "segments"):
         df = get(name)
         if df is not None:
             if "phase_raw" in df:
                 df["phase"] = df["phase_raw"].map(lambda v: decode_phase(v, phase_dom))
                 df = df.drop(columns=["phase_raw"])
+            if "parent_circuit_source" in df.columns and cs_to_site:
+                traced = df["parent_circuit_source"].map(cs_to_site)
+                if "transformer_site_id" in df.columns:
+                    df["transformer_site_id"] = df["transformer_site_id"].fillna(traced)
+                else:
+                    df["transformer_site_id"] = traced
+                miss = int(df["transformer_site_id"].isna().sum())
+                if miss:
+                    logger.warning(f"{name}: {miss} elementos sin puesto por traza "
+                                   f"(PARENTCIRCUITSOURCEGUID sin correspondencia).")
+            if name == "segments":
+                # la sección se deduce de la capa de origen (primario/BT)
+                df["section"] = np.where(
+                    df["source_layer"].str.contains("BajaTension", case=False),
+                    "secondary", "primary")
             out[name] = df
 
     return out
@@ -296,23 +373,34 @@ def site_unit_summary(canonical: dict[str, pd.DataFrame]) -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
-def ingest_cnel_fgdb(path: str, root: str, mapping: dict | None = None,
-                     extract_date: str | None = None) -> dict:
-    """Ingiere una FGDB con el modelo CNEL a BRONZE, ya en modelo canónico."""
-    from .fgdb import read_layer
+def read_cnel_layers_csv(directory: str) -> dict[str, pd.DataFrame]:
+    """Lee las capas CNEL desde una carpeta de CSV (un archivo por capa).
 
-    mapping = mapping or load_cnel_mapping()
-    needed = {spec["layer"] for spec in mapping["layers"].values() if "layer" in spec}
+    Permite probar la ruta de ingesta sin FGDB ni GDAL: el nombre del archivo
+    (sin extensión) es el nombre de la capa.
+    """
     layers: dict[str, pd.DataFrame] = {}
-    for name in sorted(needed):
-        try:
-            layers[name] = read_layer(path, name)
-        except Exception as e:
-            logger.warning(f"No se pudo leer la capa '{name}': {e}")
+    for f in sorted(Path(directory).glob("*.csv")):
+        layers[f.stem] = pd.read_csv(f, low_memory=False)
+    return layers
 
-    canonical = build_canonical(layers, mapping)
+
+def ingest_cnel_csv(directory: str, root: str, mapping: dict | None = None,
+                    extract_date: str | None = None) -> dict:
+    """Ingiere un dataset CNEL en CSV a BRONZE (misma lógica que la FGDB)."""
+    mapping = mapping or load_cnel_mapping()
+    layers = read_cnel_layers_csv(directory)
+    if not layers:
+        raise ValueError(f"No se encontraron CSV de capas en {directory}")
+    logger.info(f"Capas leídas: {', '.join(sorted(layers))}")
+    return _write_canonical(build_canonical(layers, mapping), root, extract_date)
+
+
+def _write_canonical(canonical: dict[str, pd.DataFrame], root: str,
+                     extract_date: str | None) -> dict:
+    """Escribe el modelo canónico en BRONZE particionado por alimentador."""
     lake = Lakehouse(root)
-    counts: dict[str, int] = {}
+    counts: dict = {}
     for entity, df in canonical.items():
         if df is None or df.empty:
             continue
@@ -324,3 +412,24 @@ def ingest_cnel_fgdb(path: str, root: str, mapping: dict | None = None,
         counts[entity] = n
     counts["_hierarchy"] = site_unit_summary(canonical).to_dict("records")
     return counts
+
+
+def ingest_cnel_fgdb(path: str, root: str, mapping: dict | None = None,
+                     extract_date: str | None = None) -> dict:
+    """Ingiere una FGDB con el modelo CNEL a BRONZE, ya en modelo canónico."""
+    from .fgdb import read_layer
+
+    mapping = mapping or load_cnel_mapping()
+    needed = set()
+    for spec in mapping["layers"].values():
+        if "layer" in spec:
+            needed.add(spec["layer"])
+            needed.update(spec.get("extra_layers", []))
+    layers: dict[str, pd.DataFrame] = {}
+    for name in sorted(needed):
+        try:
+            layers[name] = read_layer(path, name)
+        except Exception as e:
+            logger.warning(f"No se pudo leer la capa '{name}': {e}")
+
+    return _write_canonical(build_canonical(layers, mapping), root, extract_date)

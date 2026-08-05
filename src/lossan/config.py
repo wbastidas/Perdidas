@@ -46,6 +46,7 @@ class Config:
         self._streetlight = _load_file("streetlight.yaml")
         self._conductors = _load_file("conductors.yaml")
         self._rules = _load_file("rules.yaml")
+        self._tx_catalog = _load_file("transformer_catalog.yaml")
 
     # --- bloques crudos ---
     @property
@@ -83,6 +84,10 @@ class Config:
     @property
     def rules(self) -> dict[str, Any]:
         return self._rules["rules"]
+
+    @property
+    def transformer_catalog(self) -> dict[str, Any]:
+        return self._tx_catalog["transformer_catalog"]
 
     # --- perfil activo (escala de una corrida) ---
     @property
