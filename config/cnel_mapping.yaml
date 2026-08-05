@@ -78,6 +78,10 @@ layers:
       pole_id: GLOBALID
       pole_type: TIPOESTRUCTURA
       height_m: ALTURA
+      # coordenadas: necesarias para el clustering y ruteo de campaña (§17.5).
+      # Si la capa no las trae como campo, se derivan de la geometría.
+      x: COORD_X
+      y: COORD_Y
 
   sites:                       # puestos de transformación
     layer: PuestoTransfDistribucion

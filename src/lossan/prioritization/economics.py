@@ -62,12 +62,18 @@ def build_candidates(customer_risk: pd.DataFrame, customers: pd.DataFrame,
     cand["ve_neto_usd"] = cand["benefit_usd"] - cand["cost_usd"]
     cand["roi"] = cand["benefit_usd"] / cand["cost_usd"]
 
-    # geometría representativa (para clustering y ruteo)
-    if poles is not None and not poles.empty:
+    # Geometría representativa para clustering y ruteo. Si el SIG no trae
+    # coordenadas, el plan igual se produce (sin agrupación por cercanía).
+    if (poles is not None and not poles.empty
+            and {"x", "y", "pole_id"} <= set(poles.columns)):
         rep = df.dropna(subset=["pole_id"]).groupby("transformer_site_id")["pole_id"].first()
-        xy = poles.set_index("pole_id")[["x", "y"]]
+        xy = poles.drop_duplicates(subset=["pole_id"]).set_index("pole_id")[["x", "y"]]
         cand = cand.merge(rep.rename("pole_id"), left_on="site_id", right_index=True, how="left")
         cand = cand.merge(xy, left_on="pole_id", right_index=True, how="left")
-    cand["x"] = cand.get("x", 0.0)
-    cand["y"] = cand.get("y", 0.0)
+    if "x" not in cand.columns:
+        cand["x"] = 0.0
+    if "y" not in cand.columns:
+        cand["y"] = 0.0
+    cand["x"] = cand["x"].fillna(0.0)
+    cand["y"] = cand["y"].fillna(0.0)
     return cand.sort_values("roi", ascending=False).reset_index(drop=True)

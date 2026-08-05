@@ -279,3 +279,26 @@ def test_missing_codigounico_falls_back_to_globalid():
     assert cust["customer_unit_id"].notna().all()
     assert cust.loc[0, "customer_unit_id"] == "{C1}"   # cayó al GLOBALID
     assert cust.loc[2, "customer_unit_id"] == "CU-003"  # el resto conserva el suyo
+
+
+def test_pole_coordinates_are_mapped():
+    """Sin coordenadas, el clustering y ruteo de campaña no agrupan (§17.5)."""
+    canon = build_canonical(_cnel_layers_with_attributes(), load_cnel_mapping())
+    poles = canon["poles"]
+    assert {"x", "y"} <= set(poles.columns)
+
+
+def test_plan_candidates_without_coordinates():
+    """Si el SIG no trae coordenadas, el plan igual se produce (sin cercanía)."""
+    import numpy as np
+    from lossan.prioritization import build_candidates
+    risk = pd.DataFrame({"customer_unit_id": ["a", "b"], "risk_score": [0.9, 0.5],
+                         "recoverable_kwh_month": [100.0, 50.0],
+                         "feeder_id": ["F0", "F0"]})
+    cust = pd.DataFrame({"customer_unit_id": ["a", "b"],
+                         "transformer_site_id": ["TS1", "TS1"],
+                         "feeder_id": ["F0", "F0"], "pole_id": ["P1", "P1"]})
+    poles = pd.DataFrame({"pole_id": ["P1"]})          # sin x/y
+    cand = build_candidates(risk, cust, poles, load_config())
+    assert not cand.empty
+    assert cand["x"].notna().all() and cand["y"].notna().all()

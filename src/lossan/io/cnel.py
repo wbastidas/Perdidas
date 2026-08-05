@@ -204,6 +204,20 @@ def build_canonical(layers: dict[str, pd.DataFrame], mapping: dict,
     # --- poles / estructuras ---
     poles = get("poles")
     if poles is not None:
+        # Las coordenadas alimentan el clustering y el ruteo de campaña (§17.5).
+        # Si la capa no trae COORD_X/COORD_Y como campos, se derivan de la
+        # geometría del punto; si tampoco hay geometría, se marcan como faltantes.
+        raw_poles = layers.get(lmap["poles"]["layer"])
+        for axis in ("x", "y"):
+            if axis not in poles.columns:
+                geom = getattr(raw_poles, "geometry", None)
+                if geom is not None and hasattr(geom, axis):
+                    poles[axis] = getattr(geom, axis).to_numpy()
+                else:
+                    poles[axis] = np.nan
+        if poles[["x", "y"]].isna().all().all():
+            logger.warning("Estructuras sin coordenadas: el clustering y el "
+                           "ruteo de la campaña no podrán agrupar por cercanía.")
         out["poles"] = poles
 
     # --- unidades de transformador (para deducir el banco si falta el dominio) ---
